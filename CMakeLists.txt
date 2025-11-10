@@ -21,6 +21,7 @@ set(PROJECT_SOURCES
     main.cpp
     src/Core/MainWindow.cpp
     src/Game/GameWidget.cpp
+    src/Game/GameEngine.cpp
 )
 
 # Указываем все ваши заголовочные файлы (для IDE)
@@ -28,7 +29,9 @@ set(PROJECT_HEADERS
     src/Core/MainWindow.h
     src/Game/GameWidget.h
     src/Game/Constants.h
-
+    src/Game/GameEngine.h
+    src/Game/CoreEntities.h
+    src/Game/PipeEntity.h
 )
 
 # Создаем исполняемый файл

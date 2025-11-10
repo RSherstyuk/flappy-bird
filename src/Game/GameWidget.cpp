@@ -3,152 +3,102 @@
 #include "Constants.h"
 #include <QPainter>
 
-#include <QDebug>
 #include <QKeyEvent>
-#include <QRandomGenerator>
+#include <QDebug>
 
-GameWidget::GameWidget(QWidget *parent) : QWidget(parent) {
-  setFixedSize(WINDOW_WIDTH, WINDOW_HEIGHT);
-  setFocusPolicy(Qt::StrongFocus);
+// Размеры птицы (нужны только для рендеринга)
+const double BIRD_RENDERING_WIDTH = 20.0;
+const double BIRD_RENDERING_HEIGHT = 20.0;
 
-  setupGame();
+
+GameWidget::GameWidget(QWidget *parent) // <-- QWidget
+    : QWidget(parent)
+
+{
+    // Инициализация движка
+    m_gameEngine = new Flap::Engine::GameEngine(WINDOW_WIDTH, WINDOW_HEIGHT, this);
+    
+    m_gameTimer = new QTimer(this);
+    connect(m_gameTimer, &QTimer::timeout, this, &GameWidget::updateGame);
+    m_gameTimer->start(GAME_TIMER_INTERVAL);
+    
+    // Важно для QWidget, чтобы ловить ввод с клавиатуры
+
+    setFocusPolicy(Qt::StrongFocus);
+
+    setFixedSize(WINDOW_WIDTH, WINDOW_HEIGHT);
 }
 
-void GameWidget::setupGame() {
-  m_gameTimer = new QTimer(this);
-
-  connect(m_gameTimer, &QTimer::timeout, this, &GameWidget::updateGame);
-
-  resetGame();
+GameWidget::~GameWidget() 
+{
+    // QWidget автоматически удалит QTimer и QObject-дочерний m_gameEngine
 }
 
-void GameWidget::resetGame() {
-  m_gameRunning = false;
-  m_score = 0;
-  m_pipeSpawnTimer = 0;
+void GameWidget::drawRectangle(QPainter *painter, const Flap::Core::Rectangle& rect, const QColor& color)
+{
+    painter->setBrush(color);
 
-  m_birdRect.setRect(BIRD_X_POSITION, WINDOW_HEIGHT / 2 - BIRD_SIZE / 2,
-                     BIRD_SIZE, BIRD_SIZE);
-  m_birdVelocity = 0;
-
-  m_topPipes.clear();
-  m_bottomPipes.clear();
-
-  createPipe();
-
-  m_gameTimer->start(GAME_TIMER_INTERVAL);
-
-  update();
+    // Для QPainter можно использовать QRectF, но для ясности используем поля struct
+    painter->drawRect(rect.position.x, rect.position.y, rect.size.x, rect.size.y);
 }
 
-void GameWidget::paintEvent(QPaintEvent *event) {
-  Q_UNUSED(event);
-  QPainter painter(this);
+void GameWidget::paintEvent(QPaintEvent *event) // <-- paintEvent
+{
+    Q_UNUSED(event);
+    QPainter painter(this); // <-- Передаем 'this'
 
-  painter.fillRect(rect(), QColor(135, 206, 235)); // Sky blue
+    // 1. Фон
+    painter.fillRect(rect(), QColor(135, 206, 235));
 
-  painter.setBrush(Qt::green);
-  for (const QRectF &pipe : m_topPipes) {
-    painter.drawRect(pipe);
-  }
-  for (const QRectF &pipe : m_bottomPipes) {
-    painter.drawRect(pipe);
-  }
-
-  painter.setBrush(Qt::yellow);
-  painter.drawRect(m_birdRect);
-
-  painter.setPen(Qt::black);
-  painter.setFont(QFont("Arial", 24, QFont::Bold));
-  painter.drawText(rect(), Qt::AlignTop | Qt::AlignHCenter,
-                   QString::number(m_score));
-
-  if (!m_gameRunning) {
-    painter.setFont(QFont("Arial", 20));
-    painter.drawText(rect(), Qt::AlignCenter, "Press SPACE to Start");
-  }
-}
-
-void GameWidget::keyPressEvent(QKeyEvent *event) {
-  if (event->key() == Qt::Key_Space) {
-    if (!m_gameRunning) {
-      resetGame();
-      m_gameRunning = true;
+    // 2. Трубы
+    const auto& pipes = m_gameEngine->getPipes();
+    for (const auto& pipe : pipes) {
+        // Получаем прямоугольники для отрисовки
+        QList<Flap::Core::Rectangle> rects = pipe.getRects(WINDOW_HEIGHT);
+        
+        // Рисуем верхнюю и нижнюю часть
+        drawRectangle(&painter, rects[0], Qt::darkGreen);
+        drawRectangle(&painter, rects[1], Qt::darkGreen);
     }
 
-    m_birdVelocity = FLAP_STRENGTH;
-  }
+    // 3. Птица
+    const auto& bird = m_gameEngine->getBird();
+    
+    Flap::Core::Rectangle birdRect {
+        bird.position, 
+        Flap::Core::Vector2D(BIRD_RENDERING_WIDTH, BIRD_RENDERING_HEIGHT)
+    };
+    
+    drawRectangle(&painter, birdRect, bird.isAlive ? Qt::yellow : Qt::red);
+
+    // 4. Счет и Статус
+    painter.setPen(Qt::black);
+    painter.setFont(QFont("Arial", 24, QFont::Bold));
+    painter.drawText(rect(), Qt::AlignTop | Qt::AlignHCenter, QString::number(bird.score));
+
+    if (!m_gameEngine->isRunning() && bird.isAlive) {
+        painter.setFont(QFont("Arial", 20));
+        painter.drawText(rect(), Qt::AlignCenter, "Press SPACE to Start");
+    } else if (!m_gameEngine->isRunning() && !bird.isAlive) {
+        painter.setFont(QFont("Arial", 20));
+        painter.drawText(rect(), Qt::AlignCenter, 
+                          QString("Game Over! Score: %1\nPress SPACE to Restart").arg(bird.score));
+    }
 }
 
-void GameWidget::updateGame() {
-  if (!m_gameRunning) {
-    return;
-  }
-
-  m_birdVelocity += GRAVITY;
-  m_birdRect.translate(0, m_birdVelocity);
-
-  bool scored = false;
-  for (int i = 0; i < m_topPipes.size(); ++i) {
-    m_topPipes[i].translate(-PIPE_SPEED, 0);
-    m_bottomPipes[i].translate(-PIPE_SPEED, 0);
-
-    if (m_topPipes[i].right() < m_birdRect.left() &&
-        m_topPipes[i].right() + PIPE_SPEED >= m_birdRect.left()) {
-      m_score++;
-      scored = true;
+void GameWidget::keyPressEvent(QKeyEvent *event) // <-- keyPressEvent
+{
+    if (event->key() == Qt::Key_Space) {
+        if (!m_gameEngine->isRunning() && !m_gameEngine->getBird().isAlive) {
+            // Если игра закончилась, перезапускаем
+            m_gameEngine->reset();
+        }
+        m_gameEngine->flapBird();
     }
-  }
-
-  if (scored) {
-
-    qDebug() << "Score:" << m_score;
-  }
-
-  if (!m_topPipes.isEmpty() && m_topPipes.first().right() < 0) {
-    m_topPipes.removeFirst();
-    m_bottomPipes.removeFirst();
-  }
-
-  m_pipeSpawnTimer += PIPE_SPEED;
-  if (m_pipeSpawnTimer >= PIPE_SPACING) {
-    createPipe();
-    m_pipeSpawnTimer = 0;
-  }
-
-  if (checkCollision()) {
-    m_gameRunning = false;
-  }
-
-  update();
 }
 
-void GameWidget::createPipe() {
-  int minHeight = 50;
-  int maxHeight = WINDOW_HEIGHT - PIPE_GAP - 50;
-  int gapTop = QRandomGenerator::global()->bounded(minHeight, maxHeight);
-
-  m_topPipes.append(QRectF(WINDOW_WIDTH, 0, PIPE_WIDTH, gapTop));
-
-  m_bottomPipes.append(QRectF(WINDOW_WIDTH, gapTop + PIPE_GAP, PIPE_WIDTH,
-                              WINDOW_HEIGHT - gapTop - PIPE_GAP));
-}
-
-bool GameWidget::checkCollision() {
-  if (m_birdRect.bottom() > WINDOW_HEIGHT || m_birdRect.top() < 0) {
-    return true;
-  }
-
-  for (const QRectF &pipe : m_topPipes) {
-    if (m_birdRect.intersects(pipe)) {
-      return true;
-    }
-  }
-  for (const QRectF &pipe : m_bottomPipes) {
-    if (m_birdRect.intersects(pipe)) {
-      return true;
-    }
-  }
-
-  return false;
+void GameWidget::updateGame()
+{
+    m_gameEngine->update(); // Обновляем чистый движок
+    update();              // Запрашиваем перерисовку
 }
